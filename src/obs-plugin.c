@@ -4,6 +4,7 @@
  */
 #include <obs-module.h>
 #include <util/platform.h>
+#include <string.h>
 
 #include "cv710.h"
 
@@ -12,6 +13,7 @@ OBS_DECLARE_MODULE()
 struct source {
 	obs_source_t *source;
 	struct cv710 *card;
+	float since_check;
 };
 
 static void on_video(void *ctx, const uint8_t *yuy2, int width, int height)
@@ -61,6 +63,26 @@ static void on_log(void *ctx, const char *message)
 	blog(LOG_INFO, "[cv710] %s", message);
 }
 
+/* Recording or streaming = any active encoded output except the replay buffer. */
+static bool output_on_air(void *param, obs_output_t *output)
+{
+	if (obs_output_active(output) && (obs_output_get_flags(output) & OBS_OUTPUT_ENCODED) &&
+	    strcmp(obs_output_get_id(output), "replay_buffer") != 0)
+		*(bool *)param = true;
+	return true;
+}
+
+static void video_tick(void *data, float seconds)
+{
+	struct source *s = data;
+	if ((s->since_check += seconds) < 0.25f)
+		return;
+	s->since_check = 0;
+	bool on_air = false;
+	obs_enum_outputs(output_on_air, &on_air);
+	cv710_set_recording(s->card, on_air);
+}
+
 static const char *get_name(void *unused)
 {
 	(void)unused;
@@ -95,6 +117,7 @@ static struct obs_source_info cv710_source = {
 	.get_name = get_name,
 	.create = create,
 	.destroy = destroy,
+	.video_tick = video_tick,
 };
 
 bool obs_module_load(void)
